@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import swiftCartLogo from './assets/swiftcart-logo.png'
 import './App.css'
 
 const emptyTotals = {
@@ -26,7 +27,118 @@ async function apiRequest(path, options = {}, token = '') {
   return data
 }
 
-function LandingPage({ onLogin }) {
+function ThemeButton({ theme, onToggle }) {
+  return (
+    <button className="theme-button" onClick={onToggle} type="button">
+      {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+    </button>
+  )
+}
+
+function BrandLogo() {
+  return (
+    <div className="brand-logo">
+      <img src={swiftCartLogo} alt="SwiftCart logo" />
+      <span>SwiftCart</span>
+    </div>
+  )
+}
+
+function ScannerModal({ title, hint, onDetected, onClose }) {
+  const videoRef = useRef(null)
+  const streamRef = useRef(null)
+  const detectorRef = useRef(null)
+  const rafRef = useRef(0)
+  const [status, setStatus] = useState('Starting camera...')
+
+  useEffect(() => {
+    let isActive = true
+
+    const stopCamera = () => {
+      cancelAnimationFrame(rafRef.current)
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+    }
+
+    const scanFrame = async () => {
+      if (!isActive || !videoRef.current || !detectorRef.current) return
+
+      try {
+        const codes = await detectorRef.current.detect(videoRef.current)
+
+        if (codes.length > 0) {
+          const value = codes[0].rawValue
+          stopCamera()
+          onDetected(value)
+          return
+        }
+      } catch {
+        setStatus('Keep the code steady inside the frame.')
+      }
+
+      rafRef.current = requestAnimationFrame(scanFrame)
+    }
+
+    const startCamera = async () => {
+      if (!('BarcodeDetector' in window)) {
+        setStatus('Camera scanning is not supported in this browser. Use Chrome or Edge, or type the code manually.')
+        return
+      }
+
+      try {
+        detectorRef.current = new window.BarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'code_128', 'qr_code'],
+        })
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false,
+        })
+
+        streamRef.current = stream
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play()
+          setStatus('Point the camera at a barcode or QR code.')
+          scanFrame()
+        }
+      } catch (error) {
+        setStatus(error.message || 'Camera permission was blocked.')
+      }
+    }
+
+    startCamera()
+
+    return () => {
+      isActive = false
+      stopCamera()
+    }
+  }, [onDetected])
+
+  return (
+    <div className="scanner-overlay" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="scanner-modal">
+        <div className="scanner-header">
+          <div>
+            <p className="eyebrow">Camera scanner</p>
+            <h2>{title}</h2>
+          </div>
+          <button onClick={onClose} type="button">Close</button>
+        </div>
+
+        <div className="camera-frame">
+          <video ref={videoRef} muted playsInline />
+          <span className="target-box" />
+        </div>
+
+        <p className="scanner-status">{status}</p>
+        <p className="scanner-hint">{hint}</p>
+      </div>
+    </div>
+  )
+}
+
+function LandingPage({ onLogin, theme, onToggleTheme }) {
   const [form, setForm] = useState({ name: '', phone: '' })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -52,11 +164,11 @@ function LandingPage({ onLogin }) {
   return (
     <main className="landing-page">
       <nav className="landing-nav">
-        <div>
-          <span className="brand-mark">SC</span>
-          <span className="brand-name">SwiftCart</span>
+        <BrandLogo />
+        <div className="landing-actions">
+          <ThemeButton theme={theme} onToggle={onToggleTheme} />
+          <a href="#login">Login</a>
         </div>
-        <a href="#login">Login</a>
       </nav>
 
       <section className="landing-hero">
@@ -109,7 +221,7 @@ function LandingPage({ onLogin }) {
   )
 }
 
-function ShoppingPage({ auth, onLogout }) {
+function ShoppingPage({ auth, onLogout, theme, onToggleTheme }) {
   const [stores, setStores] = useState([])
   const [products, setProducts] = useState([])
   const [selectedStore, setSelectedStore] = useState('')
@@ -118,12 +230,16 @@ function ShoppingPage({ auth, onLogout }) {
   const [lastScan, setLastScan] = useState(null)
   const [history, setHistory] = useState([])
   const [verifiedReceipt, setVerifiedReceipt] = useState(null)
+  const [scannerMode, setScannerMode] = useState(null)
 
   const selectedStoreName = useMemo(() => {
     return stores.find((store) => store.id === selectedStore)?.name || 'Select store'
   }, [selectedStore, stores])
 
   const receiptId = cart.receipt?.id || 'Complete payment to generate receipt'
+  const receiptQrUrl = cart.receipt?.id
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(cart.receipt.id)}`
+    : ''
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -223,15 +339,52 @@ function ShoppingPage({ auth, onLogout }) {
     }
   }
 
+  const verifyScannedReceipt = async (scannedValue) => {
+    setScannerMode(null)
+
+    try {
+      const data = await apiRequest('/api/receipts/verify', {
+        method: 'POST',
+        body: JSON.stringify({ receiptId: scannedValue.trim() }),
+      })
+      setVerifiedReceipt(data.receipt)
+      setLastScan({ type: 'success', message: 'Exit gate verified the scanned receipt.' })
+    } catch (requestError) {
+      setLastScan({ type: 'error', message: requestError.message })
+    }
+  }
+
+  const scanCameraProduct = (barcode) => {
+    setScannerMode(null)
+    setScanCode(barcode)
+    scanProduct(barcode)
+  }
+
   return (
     <main className="app-shell">
+      {scannerMode === 'product' && (
+        <ScannerModal
+          title="Scan product barcode"
+          hint="Use a real EAN barcode from a product, or a QR/code that contains a barcode number from the store database."
+          onDetected={scanCameraProduct}
+          onClose={() => setScannerMode(null)}
+        />
+      )}
+
+      {scannerMode === 'receipt' && (
+        <ScannerModal
+          title="Scan receipt QR"
+          hint="Scan the receipt QR shown after payment. The QR contains the receipt ID used by the backend verification API."
+          onDetected={verifyScannedReceipt}
+          onClose={() => setScannerMode(null)}
+        />
+      )}
+
       <section className="app-header">
         <nav className="topbar">
-          <div>
-            <span className="brand-mark">SC</span>
-            <span className="brand-name">SwiftCart</span>
-          </div>
+          <BrandLogo />
           <div className="user-actions">
+            <ThemeButton theme={theme} onToggle={onToggleTheme} />
             <span className="store-chip">{auth.user.name}</span>
             <button onClick={onLogout}>Logout</button>
           </div>
@@ -291,6 +444,9 @@ function ShoppingPage({ auth, onLogout }) {
             />
             <button onClick={() => scanProduct()}>Scan</button>
           </div>
+          <button className="camera-button" onClick={() => setScannerMode('product')} type="button">
+            Open camera scanner
+          </button>
 
           <div className="sample-grid">
             {products.map((product) => (
@@ -350,13 +506,17 @@ function ShoppingPage({ auth, onLogout }) {
           </div>
 
           <div className="payment-box">
-            <div className="qr-code" aria-label="UPI payment QR">
-              <span />
-              <span />
-              <span />
-            </div>
+            {receiptQrUrl ? (
+              <img className="receipt-qr" src={receiptQrUrl} alt={`Receipt QR for ${cart.receipt.id}`} />
+            ) : (
+              <div className="qr-code" aria-label="UPI payment QR">
+                <span />
+                <span />
+                <span />
+              </div>
+            )}
             <div>
-              <p>UPI / card / wallet payment</p>
+              <p>{receiptQrUrl ? 'Receipt QR for exit scan' : 'UPI / card / wallet payment'}</p>
               <strong>Rs.{cart.totals?.grandTotal || 0}</strong>
             </div>
           </div>
@@ -377,6 +537,9 @@ function ShoppingPage({ auth, onLogout }) {
           </div>
 
           <button className="verify-button" onClick={verifyReceipt}>Verify at exit gate</button>
+          <button className="camera-button secondary" onClick={() => setScannerMode('receipt')} type="button">
+            Scan receipt QR
+          </button>
 
           <div className="fraud-card">
             <h3>Fraud prevention</h3>
@@ -401,12 +564,29 @@ function ShoppingPage({ auth, onLogout }) {
 
 function App() {
   const [auth, setAuth] = useState(null)
+  const [theme, setTheme] = useState(() => localStorage.getItem('swiftcart-theme') || 'light')
 
-  if (!auth) {
-    return <LandingPage onLogin={setAuth} />
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    localStorage.setItem('swiftcart-theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme((currentTheme) => (currentTheme === 'dark' ? 'light' : 'dark'))
   }
 
-  return <ShoppingPage auth={auth} onLogout={() => setAuth(null)} />
+  if (!auth) {
+    return <LandingPage onLogin={setAuth} theme={theme} onToggleTheme={toggleTheme} />
+  }
+
+  return (
+    <ShoppingPage
+      auth={auth}
+      onLogout={() => setAuth(null)}
+      theme={theme}
+      onToggleTheme={toggleTheme}
+    />
+  )
 }
 
 export default App
