@@ -45,6 +45,7 @@ const products = [
 ]
 
 const sessions = new Map()
+const users = new Map()
 const carts = new Map()
 const receipts = new Map()
 
@@ -94,6 +95,13 @@ function getCart(token) {
   return carts.get(token)
 }
 
+function createSession(user) {
+  const token = randomUUID()
+  sessions.set(token, user)
+  carts.set(token, { storeId: stores[0].id, items: [], paymentStatus: 'pending', receipt: null })
+  return { token, user }
+}
+
 function calculateTotals(items) {
   const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0)
   const savings = items.reduce((sum, item) => sum + (item.mrp - item.price) * item.quantity, 0)
@@ -140,19 +148,43 @@ async function handleRequest(request, response) {
       return
     }
 
-    if (request.method === 'POST' && pathname === '/api/auth/login') {
+    if (request.method === 'POST' && pathname === '/api/auth/register') {
       const { name, phone } = await readBody(request)
+      const normalizedPhone = String(phone || '').trim()
 
-      if (!name || !phone) {
+      if (!name || !normalizedPhone) {
         sendJson(response, 400, { message: 'Name and phone are required.' })
         return
       }
 
-      const token = randomUUID()
-      const user = { id: randomUUID(), name, phone }
-      sessions.set(token, user)
-      carts.set(token, { storeId: stores[0].id, items: [], paymentStatus: 'pending', receipt: null })
-      sendJson(response, 200, { token, user })
+      if (users.has(normalizedPhone)) {
+        sendJson(response, 409, { message: 'An account already exists for this phone. Please login.' })
+        return
+      }
+
+      const user = { id: randomUUID(), name, phone: normalizedPhone }
+      users.set(normalizedPhone, user)
+      sendJson(response, 201, createSession(user))
+      return
+    }
+
+    if (request.method === 'POST' && pathname === '/api/auth/login') {
+      const { phone } = await readBody(request)
+      const normalizedPhone = String(phone || '').trim()
+
+      if (!normalizedPhone) {
+        sendJson(response, 400, { message: 'Phone is required.' })
+        return
+      }
+
+      const user = users.get(normalizedPhone)
+
+      if (!user) {
+        sendJson(response, 404, { message: 'No account found. Create an account first.' })
+        return
+      }
+
+      sendJson(response, 200, createSession(user))
       return
     }
 

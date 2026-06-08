@@ -140,18 +140,20 @@ function ScannerModal({ title, hint, onDetected, onClose }) {
 
 function LandingPage({ onLogin, theme, onToggleTheme }) {
   const [form, setForm] = useState({ name: '', phone: '' })
+  const [authMode, setAuthMode] = useState('login')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const isCreateMode = authMode === 'register'
 
-  const login = async (event) => {
+  const submitAuth = async (event) => {
     event.preventDefault()
     setIsLoading(true)
     setError('')
 
     try {
-      const data = await apiRequest('/api/auth/login', {
+      const data = await apiRequest(`/api/auth/${authMode}`, {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify(isCreateMode ? form : { phone: form.phone }),
       })
       onLogin(data)
     } catch (requestError) {
@@ -186,20 +188,51 @@ function LandingPage({ onLogin, theme, onToggleTheme }) {
           </div>
         </div>
 
-        <form className="login-card" id="login" onSubmit={login}>
+        <form className="login-card" id="login" onSubmit={submitAuth}>
           <div className="section-heading">
-            <p>Customer login</p>
-            <h2>Start shopping</h2>
+            <p>{isCreateMode ? 'New customer' : 'Customer login'}</p>
+            <h2>{isCreateMode ? 'Create account' : 'Start shopping'}</h2>
           </div>
 
-          <label htmlFor="name">Full name</label>
-          <input
-            id="name"
-            value={form.name}
-            onChange={(event) => setForm({ ...form, name: event.target.value })}
-            placeholder="Mukesh Yadav"
-            required
-          />
+          <div className="auth-tabs" role="tablist" aria-label="Account options">
+            <button
+              aria-selected={!isCreateMode}
+              className={!isCreateMode ? 'active' : ''}
+              onClick={() => {
+                setAuthMode('login')
+                setError('')
+              }}
+              role="tab"
+              type="button"
+            >
+              Login
+            </button>
+            <button
+              aria-selected={isCreateMode}
+              className={isCreateMode ? 'active' : ''}
+              onClick={() => {
+                setAuthMode('register')
+                setError('')
+              }}
+              role="tab"
+              type="button"
+            >
+              Create account
+            </button>
+          </div>
+
+          {isCreateMode && (
+            <>
+              <label htmlFor="name">Full name</label>
+              <input
+                id="name"
+                value={form.name}
+                onChange={(event) => setForm({ ...form, name: event.target.value })}
+                placeholder="Mukesh Yadav"
+                required
+              />
+            </>
+          )}
 
           <label htmlFor="phone">Mobile number</label>
           <input
@@ -213,8 +246,23 @@ function LandingPage({ onLogin, theme, onToggleTheme }) {
           {error && <p className="scan-message error">{error}</p>}
 
           <button className="pay-button" disabled={isLoading}>
-            {isLoading ? 'Logging in...' : 'Login and open app'}
+            {isLoading
+              ? isCreateMode ? 'Creating account...' : 'Logging in...'
+              : isCreateMode ? 'Create account and open app' : 'Login and open app'}
           </button>
+
+          <p className="auth-switch">
+            {isCreateMode ? 'Already have an account?' : 'New to SwiftCart?'}
+            <button
+              onClick={() => {
+                setAuthMode(isCreateMode ? 'login' : 'register')
+                setError('')
+              }}
+              type="button"
+            >
+              {isCreateMode ? 'Login' : 'Create account'}
+            </button>
+          </p>
         </form>
       </section>
     </main>
